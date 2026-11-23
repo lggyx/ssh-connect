@@ -1,0 +1,5 @@
+# hosts.tsv 示例 —— 复制到 ~/.ssh-connect/hosts.tsv 或直接用 ssh-connect add 添加
+# 列：名字 <Tab> 用户 <Tab> 地址 <Tab> 端口 <Tab> 私钥 <Tab> 附加选项(Key=Value;Key=Value) <Tab> tmux会话名
+# 注意：这个文件含主机信息，别提交到公开仓库
+pc	bob	frps.example.com	22222	~/.ssh/id_ed25519	ServerAliveInterval=30;ServerAliveCountMax=3	main
+vps	root	vps.example.com	22		ServerAliveInterval=30	work
