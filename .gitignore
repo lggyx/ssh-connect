@@ -1,0 +1,6 @@
+# 私钥 / 本地配置，一律不进仓库
+auth_keys
+*.key
+*.pem
+id_*
+hosts.tsv
