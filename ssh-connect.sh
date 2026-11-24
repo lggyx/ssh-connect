@@ -81,6 +81,28 @@ host_exists() { [ -n "$(host_field "$1" 1)" ]; }
 
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; }
 
+pick_host() { # 弹编号列表供选择，选中的名字放全局 _pick
+    local names=() i sel
+    mapfile -t names < <(host_names | grep . || true)
+    if [ ${#names[@]} -eq 0 ]; then
+        warn "还没有主机，先用 add 添加一个"
+        return 1
+    fi
+    echo "选择主机："
+    for i in "${!names[@]}"; do
+        printf '  %2d) %s\n' "$((i + 1))" "${names[$i]}"
+    done
+    read -rp "编号> " sel || return 1
+    case "$sel" in
+        ''|*[!0-9]*) fail "请输入编号"; return 1 ;;
+    esac
+    if [ "$sel" -lt 1 ] || [ "$sel" -gt ${#names[@]} ]; then
+        fail "编号超出范围（1-${#names[@]}）"
+        return 1
+    fi
+    _pick="${names[$((sel - 1))]}"
+}
+
 drop_host_line() { # 从 hosts.tsv 删掉指定主机行
     { grep -v "^$1"$'\t' "$HOSTS_FILE" 2>/dev/null || true; } > "$HOSTS_FILE.tmp"
     mv "$HOSTS_FILE.tmp" "$HOSTS_FILE"
@@ -161,7 +183,7 @@ build_opts() { # name → 全局 _sc_opts 数组 + _sc_target
 
 connect_ssh() {
     local name="${1:-}"
-    [ -z "$name" ] && { fail "用法: ssh-connect c <主机名>"; return 1; }
+    if [ -z "$name" ]; then pick_host || return 1; name="$_pick"; fi
     ensure_data; build_opts "$name" || return 1
     local tmux_s; tmux_s="$(host_field "$name" 7)"
     if [ "${SSH_CONNECT_DRYRUN:-0}" = "1" ]; then
@@ -181,7 +203,7 @@ connect_ssh() {
 
 connect_mosh() {
     local name="${1:-}"
-    [ -z "$name" ] && { fail "用法: ssh-connect m <主机名>"; return 1; }
+    if [ -z "$name" ]; then pick_host || return 1; name="$_pick"; fi
     ensure_data; build_opts "$name" || return 1
     command -v mosh >/dev/null 2>&1 || { fail "没装 mosh：Termux 跑 pkg install mosh，Debian/Ubuntu 跑 apt install mosh"; return 1; }
     local port ident extra sshstr kv ifs_old tmux_s
@@ -211,14 +233,15 @@ connect_mosh() {
 
 remote_exec() {
     local name="${1:-}"; [ $# -gt 0 ] && shift
-    [ -z "$name" ] && { fail "用法: ssh-connect x <主机名> <命令...>"; return 1; }
+    if [ -z "$name" ]; then pick_host || return 1; name="$_pick"; fi
     ensure_data; build_opts "$name" || return 1
     ssh "${_sc_opts[@]}" "$_sc_target" "$@"
 }
 
 push_file() {
     local name="${1:-}" src="${2:-}" dst="${3:-}"
-    { [ -z "$name" ] || [ -z "$src" ] || [ -z "$dst" ]; } && { fail "用法: ssh-connect p <主机名> <本地路径> <远程路径>"; return 1; }
+    if [ -z "$name" ]; then pick_host || return 1; name="$_pick"; fi
+    { [ -z "$src" ] || [ -z "$dst" ]; } && { fail "用法: ssh-connect p <主机名> <本地路径> <远程路径>"; return 1; }
     ensure_data; build_opts "$name" || return 1
     local port ident scpopts=()
     port="$(host_field "$name" 4)"; ident="$(host_field "$name" 5)"
@@ -229,7 +252,7 @@ push_file() {
 
 test_host() {
     local name="${1:-}"
-    [ -z "$name" ] && { fail "用法: ssh-connect t <主机名>"; return 1; }
+    if [ -z "$name" ]; then pick_host || return 1; name="$_pick"; fi
     ensure_data; build_opts "$name" || return 1
     local t0 t1
     t0=$(date +%s%N)
@@ -299,6 +322,28 @@ _ssh_connect_names() {
     return 0
 }
 
+_ssh_connect_pick() { # 弹编号列表，选中的名字放全局 _sc_pick
+    local names=() i sel
+    mapfile -t names < <(_ssh_connect_names | grep . || true)
+    if [ ${#names[@]} -eq 0 ]; then
+        echo "ssh-connect: 还没有主机，用 ssh-connect add 添加" >&2
+        return 1
+    fi
+    echo "选择主机："
+    for i in "${!names[@]}"; do
+        printf '  %2d) %s\n' "$((i + 1))" "${names[$i]}"
+    done
+    read -rp "编号> " sel || return 1
+    case "$sel" in
+        ''|*[!0-9]*) echo "ssh-connect: 请输入编号" >&2; return 1 ;;
+    esac
+    if [ "$sel" -lt 1 ] || [ "$sel" -gt ${#names[@]} ]; then
+        echo "ssh-connect: 编号超出范围（1-${#names[@]}）" >&2
+        return 1
+    fi
+    _sc_pick="${names[$((sel - 1))]}"
+}
+
 _ssh_connect_opts() { # name → 全局 _sc_opts + _sc_target
     local name="$1" user host port ident extra kv ifs_old
     user="$(_ssh_connect_field "$name" 2)"
@@ -331,9 +376,9 @@ sshl() { # 列出所有主机
     }'
 }
 
-sshc() { # SSH 连接，配了 tmux 会话就自动接入
+sshc() { # SSH 连接，配了 tmux 会话就自动接入；不带参数弹列表选
     local name="${1:-}"
-    [ -z "$name" ] && { echo "用法: sshc <主机名>"; sshl; return 1; }
+    if [ -z "$name" ]; then _ssh_connect_pick || return 1; name="$_sc_pick"; fi
     _ssh_connect_opts "$name" || return 1
     local tmux_s; tmux_s="$(_ssh_connect_field "$name" 7)"
     if [ "${SSH_CONNECT_DRYRUN:-0}" = "1" ]; then
@@ -351,9 +396,9 @@ sshc() { # SSH 连接，配了 tmux 会话就自动接入
     fi
 }
 
-sshm() { # mosh 连接，弱网/换基站不断线
+sshm() { # mosh 连接，弱网/换基站不断线；不带参数弹列表选
     local name="${1:-}"
-    [ -z "$name" ] && { echo "用法: sshm <主机名>"; return 1; }
+    if [ -z "$name" ]; then _ssh_connect_pick || return 1; name="$_sc_pick"; fi
     _ssh_connect_opts "$name" || return 1
     command -v mosh >/dev/null 2>&1 || { echo "没装 mosh：pkg install mosh" >&2; return 1; }
     local port ident extra sshstr kv ifs_old tmux_s
@@ -375,16 +420,17 @@ sshm() { # mosh 连接，弱网/换基站不断线
     fi
 }
 
-sshx() { # 远程执行命令: sshx <名字> uptime
+sshx() { # 远程执行命令: sshx <名字> uptime；不带参数弹列表选
     local name="${1:-}"; [ $# -gt 0 ] && shift
-    [ -z "$name" ] && { echo "用法: sshx <主机名> <命令...>"; return 1; }
+    if [ -z "$name" ]; then _ssh_connect_pick || return 1; name="$_sc_pick"; fi
     _ssh_connect_opts "$name" || return 1
     ssh "${_sc_opts[@]}" "$_sc_target" "$@"
 }
 
-scpc() { # 传文件: scpc <名字> <本地> <远程>
+scpc() { # 传文件: scpc <名字> <本地> <远程>；不带参数弹列表选
     local name="${1:-}" src="${2:-}" dst="${3:-}"
-    { [ -z "$name" ] || [ -z "$src" ] || [ -z "$dst" ]; } && { echo "用法: scpc <主机名> <本地路径> <远程路径>"; return 1; }
+    if [ -z "$name" ]; then _ssh_connect_pick || return 1; name="$_sc_pick"; fi
+    { [ -z "$src" ] || [ -z "$dst" ]; } && { echo "用法: scpc <主机名> <本地路径> <远程路径>"; return 1; }
     _ssh_connect_opts "$name" || return 1
     local port ident scpopts=()
     port="$(_ssh_connect_field "$name" 4)"; ident="$(_ssh_connect_field "$name" 5)"
@@ -393,9 +439,9 @@ scpc() { # 传文件: scpc <名字> <本地> <远程>
     scp "${scpopts[@]}" -r "$src" "$_sc_target:$dst"
 }
 
-ssht() { # 测连通 + 握手延迟
+ssht() { # 测连通 + 握手延迟；不带参数弹列表选
     local name="${1:-}"
-    [ -z "$name" ] && { echo "用法: ssht <主机名>"; return 1; }
+    if [ -z "$name" ]; then _ssh_connect_pick || return 1; name="$_sc_pick"; fi
     _ssh_connect_opts "$name" || return 1
     local t0 t1
     t0=$(date +%s%N)
@@ -566,12 +612,9 @@ main_menu() {
             1) add_host || true ;;
             2) rm_host || true ;;
             3) list_hosts || true ;;
-            4) read -rp "连哪个> " pick || true
-               [ -n "$pick" ] && connect_ssh "$pick" || true ;;
-            5) read -rp "mosh 连哪个> " pick || true
-               [ -n "$pick" ] && connect_mosh "$pick" || true ;;
-            6) read -rp "测哪个> " pick || true
-               [ -n "$pick" ] && test_host "$pick" || true ;;
+            4) pick_host && connect_ssh "$_pick" || true ;;
+            5) pick_host && connect_mosh "$_pick" || true ;;
+            6) pick_host && test_host "$_pick" || true ;;
             7) install_cmd || true ;;
             8) make_widget || true ;;
             9) read -rp "e=导出 / i=导入 > " act || true
